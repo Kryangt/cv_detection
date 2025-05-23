@@ -8,6 +8,7 @@ from .deep_sort.detection import Detection
 from .deep_sort.nn_matching import NearestNeighborDistanceMetric
 from .deep_sort.tools import generate_detections as gdet
 import os
+import time
 # Test OpenCV
 
 '''
@@ -22,6 +23,15 @@ encoder = gdet.create_box_encoder('deep_sort/model_data/mars-small128.pb', batch
 print("hello world")
 '''
 
+class Frame_Summary:
+    def __init__(self, frame, trackArray):
+        self.frame = frame
+        self.trackArray = trackArray
+class Tracking_Object:
+    def __init__(self, id, xCenter, yCenter):
+        self.id = id
+        self.xCenter = xCenter
+        self.yCenter = yCenter
 
 
 def process_image(img, face_detection):
@@ -110,11 +120,12 @@ def faceCameraRate(left_eye_posit, right_eye_posit, width):
 
 def process_posture(model, tracker, encoder, frame, face_detection):
 
-
+   start_time = time.time()
    result = model(frame, conf = 0.6, classes = [0])[0]
-
+   end_time = time.time()
+   print("Time taken for detection: ", end_time - start_time)
+   
    H, W, _ = frame.shape
-   global detections
    detections = []
 
 
@@ -139,15 +150,16 @@ def process_posture(model, tracker, encoder, frame, face_detection):
        Personfeature = feature[i]
        detections.append(Detection(bbox, score, Personfeature))
 
+   start_time = time.time()
    tracker.predict()
 
    #update the tracker
    tracker.update(detections)
-
+   end_time = time.time()
+   print("Time taken for tracking: ", end_time - start_time)
    tracking_Objects = tracker.tracks
 
-   if(len(tracking_Objects) == 0):
-       print ("No objects tracked")
+   id_center = [] #used to record the center of the bounding box and its id
    for track in tracking_Objects:
        
        if track.time_since_update > 0:
@@ -157,7 +169,6 @@ def process_posture(model, tracker, encoder, frame, face_detection):
        x1, y1, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
        id = track.track_id
 
-       print(tracking_Objects)
        x1 = max(0, x1)
        y1= max(0, y1)
        x2 = min(W, x1 + w)
@@ -165,8 +176,16 @@ def process_posture(model, tracker, encoder, frame, face_detection):
        if x1 >= 0 and y1 >= 0 and x2 <= W and y2 <= H:
            pos = frame[y1: y2, x1: x2,:]
            prcessed = addInfo(id, pos, (0, 0, 0))
+           start_time = time.time()
            frame[y1: y2, x1: x2 , :] = process_image(prcessed, face_detection)
-   return frame
+           end_time = time.time()
+           print("Time taken for face detection: ", end_time - start_time)   
+
+       tracking_object = Tracking_Object(id, (x1 + x2) / 2, (y1 + y2) / 2)   
+       id_center.append(tracking_object)
+
+
+   return Frame_Summary(frame, id_center)
 
 
 
@@ -179,20 +198,17 @@ args = args.parse_args()
 
 
 max_eye_distance_ratio = 0.05
-#Gaze: whether people are looking at the camera
+#Gaze: whether people are looking at tframehe camera
 #Skeleton: Posture, orientation, depth camera
-
+mp_face_detector = mp.solutions.face_detection #mp.solutions is an attribute of mp, and also a module, face_detection is also a module
+model = YOLO("yolov8n.pt")
+metric = NearestNeighborDistanceMetric("cosine", 0.5, None) #determine what metric space we use to track the objects
+tracker = Tracker(metric, 0.9, 30, 10) #initialize the tracker
+base_path = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(base_path, "deep_sort", "model_data", "mars-small128.pb")
+encoder = gdet.create_box_encoder(model_path, batch_size=1)
 def process(cv_image):
-    mp_face_detector = mp.solutions.face_detection #mp.solutions is an attribute of mp, and also a module, face_detection is also a module
     with mp_face_detector.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
     #FaceDetection is an instance or an object or a model used to detect the faces in an image based on the parameters we passed in
-
-
-        model = YOLO("yolov8n.pt")
-        metric = NearestNeighborDistanceMetric("cosine", 0.5, None) #determine what metric space we use to track the objects
-        tracker = Tracker(metric, 0.9, 30, 10) #initialize the tracker
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(base_path, "deep_sort", "model_data", "mars-small128.pb")
-        encoder = gdet.create_box_encoder(model_path, batch_size=1)
-        frame = process_posture(model, tracker, encoder,cv_image, face_detection)
-    return frame
+        frame_sum = process_posture(model, tracker, encoder,cv_image, face_detection)
+    return frame_sum
